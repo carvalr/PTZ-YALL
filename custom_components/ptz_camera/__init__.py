@@ -7,6 +7,9 @@ import time
 import logging
 from datetime import datetime
 from enum import Enum
+import base64
+import hashlib
+from numpy import random
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,14 +25,16 @@ DEFAULT_HOST = "192.168.1.244"
 ATTR_MOVE_TIME = "move_time"
 DEFAULT_MOVE_TIME = 0.5
 ATTR_CAMERA_TYPE = "camera_type"
-DEFAULT_CAMERA_TYPE = "YCC365"
+DEFAULT_CAMERA_TYPE = CameraType.YOOSEE.name
 ATTR_MOVE_DIRECTION = "move_direction"
 DEFAULT_MOVE_DIRECTION = "none"
 ATTR_MOVE_STEPS = "move_steps"
 DEFAULT_MOVE_STEPS = 60
 
+# credentials used by Y05 and YOOSEE
 USR = "admin"
-CREATION_DATE = datetime.utcnow().isoformat()[:-3] + 'Z'
+YOUR_ONVIF_PWD = "your_onvif_password"
+IS_INVERT_UPDOWN = False
 
 ATTR_PRESET_TOKEN = "preset_token"
 ATTR_PAN_TIME = "pan_time"
@@ -52,17 +57,18 @@ YCC365_DEFAULT_HEADERS = {'Content-Type': 'application/soap+xml;charset=UTF8'}
 YCC365_DEFAULT_PROFILE = "Profile_1"
 
 # Used by Y05
-Y05_PWD = "your_encrypted_password_retrieved_with_wireshark"
-Y05_NONCE = "your_encryption_key_retrieved_with_wireshark"
 Y05_DEFAULT_PROFILE = "PROFILE_000"
 Y05_DEFAULT_PRESET_TOKEN = "Preset1"
 Y05_SERVICE_PATH = ":6688/onvif/ptz_service"
 
 # Used by YOOSEE
-YOOSEE_PWD = "your_encrypted_password_retrieved_with_wireshark"
-YOOSEE_NONCE = "your_encryption_key_retrieved_with_wireshark"
 YOOSEE_DEFAULT_PROFILE = "IPCProfilesToken1"
 YOOSEE_SERVICE_PATH = ":5000/onvif/deviceio_service"
+
+CREATION_DATE = datetime.utcnow().isoformat()[:-3] + 'Z'
+YOOSEE_NONCE_STR = str(random.randint(1000000))
+YOOSEE_NONCE_BASE64 = str(base64.b64encode( YOOSEE_NONCE_STR.encode() ))
+YOOSEE_DIGEST_BASE64 = str(base64.b16encode( hashlib.sha1( (YOOSEE_NONCE_STR + CREATION_DATE + YOUR_ONVIF_PWD).encode() ).digest() ))
 
 ONVIF_SERVICE_ENVELOPE = """
 <?xml version="1.0" encoding="utf-8"?>
@@ -71,8 +77,8 @@ ONVIF_SERVICE_ENVELOPE = """
     <Security s:mustUnderstand="1" xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
         <UsernameToken>
             <Username>""" + USR + """</Username>
-            <Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">""" + Y05_PWD + """</Password>
-            <Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">""" + Y05_NONCE + """</Nonce>
+            <Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest">""" + YOOSEE_DIGEST_BASE64 + """</Password>
+            <Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">""" + YOOSEE_NONCE_BASE64 + """</Nonce>
             <Created xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">""" + CREATION_DATE + """</Created>
         </UsernameToken>
     </Security>
@@ -104,7 +110,7 @@ def setup(hass, config):
             xml = ONVIF_SERVICE_ENVELOPE.replace("_service_content_", service_call)
 
             r = requests.post('http://' + host + _SERVICE_PATH, data=xml, headers={'Content-Type': 'application/soap+xml;charset=UTF8; action="http://www.onvif.org/ver20/ptz/wsdl/' + service})
-        
+
         elif cameraType == CameraType.YCC365.name:
 
             xml = """<?xml version="1.0" encoding="utf-8"?>
@@ -126,7 +132,7 @@ def setup(hass, config):
     def move(call, move_time, x_coord=0.0, y_coord=0.0, use_stop=True):
         host = call.data.get(ATTR_HOST, DEFAULT_HOST)
         cameraType = call.data.get(ATTR_CAMERA_TYPE, DEFAULT_CAMERA_TYPE)
-        
+
         if cameraType == CameraType.Y05.name or cameraType == CameraType.YOOSEE.name:
             service = 'ContinuousMove'
 
@@ -235,7 +241,7 @@ def setup(hass, config):
 
     def move_to_direction(call):
         direction = call.data.get(ATTR_MOVE_DIRECTION, DEFAULT_MOVE_DIRECTION).lower()
-        
+
         if direction == "down":
             move_down(call)
         elif direction == "up":
@@ -256,7 +262,7 @@ def setup(hass, config):
     def move_up(call):
         move_time = call.data.get(ATTR_MOVE_TIME, DEFAULT_MOVE_TIME)
         cameraType = call.data.get(ATTR_CAMERA_TYPE, DEFAULT_CAMERA_TYPE)
-        if cameraType == CameraType.YOOSEE.name:
+        if IS_INVERT_UPDOWN:
             move(call, move_time, 0.0, -0.1)
         else:
             move(call, move_time, 0.0, 0.1)
@@ -264,7 +270,7 @@ def setup(hass, config):
     def move_down(call):
         move_time = call.data.get(ATTR_MOVE_TIME, DEFAULT_MOVE_TIME)
         cameraType = call.data.get(ATTR_CAMERA_TYPE, DEFAULT_CAMERA_TYPE)
-        if cameraType == CameraType.YOOSEE.name:
+        if IS_INVERT_UPDOWN:
             move(call, move_time, 0.0, 0.1)
         else:
             move(call, move_time, 0.0, -0.1)
@@ -295,7 +301,7 @@ def setup(hass, config):
 
         if cameraType == CameraType.Y05.name or cameraType == CameraType.YOOSEE.name:
             service = "GotoPreset"
-            
+
             if cameraType == CameraType.Y05.name:
                 _DEFAULT_PROFILE = Y05_DEFAULT_PROFILE
                 _SERVICE_PATH = Y05_SERVICE_PATH
@@ -312,7 +318,7 @@ def setup(hass, config):
             xml = ONVIF_SERVICE_ENVELOPE.replace("_service_content_", service_call)
 
             r = requests.post('http://' + host + _SERVICE_PATH, data=xml, headers={'Content-Type': 'application/soap+xml;charset=UTF8; action="http://www.onvif.org/ver20/ptz/wsdl/' + service})
-        
+
             if r.status_code != requests.codes.OK:
                 _LOGGER.error(__name__ + ": Invalid [move_to_preset] Response [" + str(r.status_code) + "]")
 
